@@ -1,5 +1,14 @@
 import React from 'react';
 import { SectionConfig, PanelConfig, BaseWidgetConfig } from '../../types';
+import {
+  DndContext,
+  DragEndEvent,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 export type TreeNodeType = 'section' | 'panel' | 'widget';
 
@@ -20,193 +29,188 @@ interface SectionTreeProps {
   onAddWidget: (parentId: string) => void;
   onDeleteNode: (node: TreeNode) => void;
   onDuplicateNode: (node: TreeNode) => void;
+  onMoveNode?: (args: {
+    kind: 'panel' | 'widget';
+    parentPanelId: string | null; // null => root section
+    activeId: string;
+    overId: string;
+  }) => void;
 }
 
-/**
- * Recursively build tree nodes from panel structure
- */
-function buildTreeNodesFromPanels(
-  panels: PanelConfig[],
-  parent?: TreeNode
-): TreeNode[] {
-  const nodes: TreeNode[] = [];
+function reorder<T>(arr: T[], fromIdx: number, toIdx: number): T[] {
+  const copy = arr.slice();
+  const [moved] = copy.splice(fromIdx, 1);
+  copy.splice(toIdx, 0, moved);
+  return copy;
+}
 
-  panels.forEach((panel) => {
-    const panelNode: TreeNode = {
-      type: 'panel',
-      id: panel['panel-id'],
-      label: `Panel: ${panel['panel-id']}`,
-      data: panel,
-      parent: parent,
-      children: [],
-    };
+type DragKind = 'panel' | 'widget';
 
-    // Add nested panels recursively
-    if (panel.panels && panel.panels.length > 0) {
-      panelNode.children = panelNode.children || [];
-      panelNode.children.push(...buildTreeNodesFromPanels(panel.panels, panelNode));
-    }
-
-    // Add widgets
-    if (panel.widgets && panel.widgets.length > 0) {
-      panelNode.children = panelNode.children || [];
-      panel.widgets.forEach((widget) => {
-        panelNode.children!.push({
-          type: 'widget',
-          id: widget['widget-id'],
-          label: `Widget: ${widget['widget-id']} (${widget.widget})`,
-          data: widget,
-          parent: panelNode,
-        });
-      });
-    }
-
-    nodes.push(panelNode);
+function SortableRow({
+  id,
+  depth,
+  selected,
+  color,
+  label,
+  onClick,
+  kind,
+  parentPanelId,
+}: {
+  id: string;
+  depth: number;
+  selected: boolean;
+  color: string;
+  label: string;
+  onClick: () => void;
+  kind: DragKind;
+  parentPanelId: string | null;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+    data: { kind, parentPanelId },
   });
 
-  return nodes;
+  const style: React.CSSProperties = {
+    marginLeft: `${depth * 16}px`,
+    marginTop: '4px',
+    padding: '8px 12px',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    position: 'relative',
+    transition,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    border: `1px solid ${color}`,
+    background: selected ? '#ffffff' : '#ffffff',
+    opacity: isDragging ? 0.6 : 1,
+    transform: CSS.Transform.toString(transform),
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} onClick={onClick}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span
+          {...attributes}
+          {...listeners}
+          style={{
+            cursor: 'grab',
+            userSelect: 'none',
+            color: '#6b7280',
+            fontSize: '14px',
+          }}
+          title="Drag to reorder"
+          onClick={(e) => e.stopPropagation()}
+        >
+          ⠿
+        </span>
+        <span style={{ fontSize: '13px', fontWeight: selected ? 700 : 500 }}>{label}</span>
+      </span>
+    </div>
+  );
 }
 
-/**
- * Tree view component for section structure
- */
 export const SectionTree: React.FC<SectionTreeProps> = ({
   section,
   selectedNode,
   onSelectNode,
-  onAddPanel,
-  onAddWidget,
-  onDeleteNode,
-  onDuplicateNode,
+  onMoveNode,
 }) => {
-  const treeNodes = React.useMemo(() => {
-    if (section.panels && section.panels.length > 0) {
-      return buildTreeNodesFromPanels(section.panels);
-    }
-    return [];
-  }, [section]);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
-  const renderTreeNode = (node: TreeNode, level: number = 0): React.ReactNode => {
-    const isSelected = selectedNode?.id === node.id && selectedNode?.type === node.type;
-    const indent = level * 20;
+  const handleDragEnd = (event: DragEndEvent) => {
+    if (!onMoveNode) return;
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const activeData: any = active.data.current;
+    const overData: any = over.data.current;
+    if (!activeData || !overData) return;
+    if (activeData.kind !== overData.kind) return;
+    if (activeData.parentPanelId !== overData.parentPanelId) return;
 
-    const getNodeStyles = () => {
-      const baseStyles: React.CSSProperties = {
-        marginLeft: `${indent}px`,
-        marginTop: '4px',
-        padding: '8px 12px',
-        borderRadius: '4px',
-        cursor: 'pointer',
-        position: 'relative',
-        transition: 'background 0.2s',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-      };
+    const kind: DragKind = activeData.kind;
+    const parentPanelId: string | null = activeData.parentPanelId ?? null;
+    const activeId = String(active.id).replace(/^panel:|^widget:/, '');
+    const overId = String(over.id).replace(/^panel:|^widget:/, '');
+    onMoveNode({ kind, parentPanelId, activeId, overId });
+  };
 
-      if (isSelected) {
-        switch (node.type) {
-          case 'section':
-            return { ...baseStyles, background: '#e3f2fd', border: '1px solid #2196f3' };
-          case 'panel':
-            return { ...baseStyles, background: '#fff3e0', border: '1px solid #ff9800' };
-          case 'widget':
-            return { ...baseStyles, background: '#e8f5e9', border: '1px solid #4caf50' };
-        }
-      }
-
-      switch (node.type) {
-        case 'section':
-          return { ...baseStyles, background: '#e3f2fd', border: '1px solid #2196f3' };
-        case 'panel':
-          return { ...baseStyles, background: '#fff3e0', border: '1px solid #ff9800' };
-        case 'widget':
-          return { ...baseStyles, background: '#e8f5e9', border: '1px solid #4caf50' };
-      }
-
-      return baseStyles;
-    };
-
-    const getIcon = () => {
-      switch (node.type) {
-        case 'section':
-          return '📁';
-        case 'panel':
-          return '📦';
-        case 'widget':
-          return '🔧';
-      }
-    };
-
-    const getActionButtonColor = () => {
-      switch (node.type) {
-        case 'section':
-          return '#2196f3';
-        case 'panel':
-          return '#ff9800';
-        case 'widget':
-          return '#4caf50';
-      }
-    };
-
+  const renderPanels = (panels: PanelConfig[], depth: number, parentPanelId: string | null) => {
+    const panelItemIds = panels.map((p) => `panel:${p['panel-id']}`);
     return (
-      <div key={node.id}>
-        <div
-          style={getNodeStyles()}
-          onClick={(e) => {
-            e.stopPropagation();
-            onSelectNode(node);
-          }}
-          onMouseEnter={(e) => {
-            const target = e.currentTarget;
-            const actionBtn = target.querySelector('.tree-action-btn') as HTMLElement;
-            if (actionBtn) actionBtn.style.opacity = '1';
-          }}
-          onMouseLeave={(e) => {
-            const target = e.currentTarget;
-            const actionBtn = target.querySelector('.tree-action-btn') as HTMLElement;
-            if (actionBtn) actionBtn.style.opacity = '0';
-          }}
-        >
-          <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span>{getIcon()}</span>
-            <span style={{ fontSize: '13px' }}>{node.label}</span>
-          </span>
-          <button
-            className="tree-action-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              onSelectNode(node);
-            }}
-            style={{
-              width: '24px',
-              height: '24px',
-              borderRadius: '50%',
-              border: 'none',
-              background: getActionButtonColor(),
-              color: 'white',
-              cursor: 'pointer',
-              fontSize: '12px',
-              opacity: isSelected ? '1' : '0',
-              transition: 'opacity 0.2s',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            ⚙
-          </button>
-        </div>
-        {node.children && node.children.length > 0 && (
-          <div style={{ marginLeft: `${indent + 20}px` }}>
-            {node.children.map((child) => renderTreeNode(child, level + 1))}
-          </div>
-        )}
-      </div>
+      <SortableContext items={panelItemIds} strategy={verticalListSortingStrategy}>
+        {panels.map((panel) => {
+          const panelNode: TreeNode = {
+            type: 'panel',
+            id: panel['panel-id'],
+            label: `Panel: ${panel['panel-id']}`,
+            data: panel,
+          };
+          const isSelected = selectedNode?.type === 'panel' && selectedNode.id === panelNode.id;
+          return (
+            <div key={panel['panel-id']}>
+              <SortableRow
+                id={`panel:${panel['panel-id']}`}
+                depth={depth}
+                selected={isSelected}
+                color={isSelected ? '#ff9800' : 'rgba(255,152,0,0.55)'}
+                label={panelNode.label}
+                onClick={() => onSelectNode(panelNode)}
+                kind="panel"
+                parentPanelId={parentPanelId}
+              />
+
+              {panel.panels && panel.panels.length > 0 && renderPanels(panel.panels, depth + 1, panel['panel-id'])}
+
+              {panel.widgets && panel.widgets.length > 0 && (
+                <div style={{ marginTop: '2px' }}>
+                  <SortableContext
+                    items={panel.widgets.map((w) => `widget:${w['widget-id']}`)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {panel.widgets.map((w) => {
+                      const widgetNode: TreeNode = {
+                        type: 'widget',
+                        id: w['widget-id'],
+                        label: `Widget: ${w['widget-id']} (${w.widget})`,
+                        data: w,
+                      };
+                      const widgetSelected = selectedNode?.type === 'widget' && selectedNode.id === widgetNode.id;
+                      return (
+                        <SortableRow
+                          key={w['widget-id']}
+                          id={`widget:${w['widget-id']}`}
+                          depth={depth + 1}
+                          selected={widgetSelected}
+                          color={widgetSelected ? '#4caf50' : 'rgba(76,175,80,0.55)'}
+                          label={widgetNode.label}
+                          onClick={() => onSelectNode(widgetNode)}
+                          kind="widget"
+                          parentPanelId={panel['panel-id']}
+                        />
+                      );
+                    })}
+                  </SortableContext>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </SortableContext>
     );
   };
 
+  const sectionNode: TreeNode = {
+    type: 'section',
+    id: section['section-id'],
+    label: `Section: ${section['section-id']}`,
+    data: section,
+  };
+
+  const sectionSelected = selectedNode?.type === 'section' && selectedNode.id === sectionNode.id;
+
   return (
+    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
       <div
         style={{
           padding: '15px',
@@ -215,65 +219,27 @@ export const SectionTree: React.FC<SectionTreeProps> = ({
           height: '100%',
         }}
       >
-        <h3 style={{ fontSize: '14px', marginBottom: '15px', color: '#2c3e50' }}>
-          Section Structure
-        </h3>
+        <h3 style={{ fontSize: '14px', marginBottom: '15px', color: '#2c3e50' }}>Section Structure</h3>
         <div
           style={{
             padding: '8px 12px',
             borderRadius: '4px',
-            background: '#e3f2fd',
+            background: sectionSelected ? '#ffffff' : '#e3f2fd',
             border: '1px solid #2196f3',
             marginBottom: '10px',
             cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
           }}
-          onClick={() => {
-            const sectionNode: TreeNode = {
-              type: 'section',
-              id: section['section-id'],
-              label: `Section: ${section['section-id']}`,
-              data: section,
-              children: treeNodes,
-            };
-            onSelectNode(sectionNode);
-          }}
+          onClick={() => onSelectNode(sectionNode)}
         >
-          <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span>📁</span>
-            <span style={{ fontSize: '13px', fontWeight: 600 }}>
-              Section: {section['section-id']}
-            </span>
-          </span>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              const sectionNode: TreeNode = {
-                type: 'section',
-                id: section['section-id'],
-                label: `Section: ${section['section-id']}`,
-                data: section,
-                children: treeNodes,
-              };
-              onSelectNode(sectionNode);
-            }}
-            style={{
-              width: '24px',
-              height: '24px',
-              borderRadius: '50%',
-              border: 'none',
-              background: '#2196f3',
-              color: 'white',
-              cursor: 'pointer',
-              fontSize: '12px',
-            }}
-          >
-            ⚙
-          </button>
+          <span style={{ fontSize: '13px', fontWeight: 700 }}>📁 {sectionNode.label}</span>
         </div>
-      {treeNodes.map((node) => renderTreeNode(node, 0))}
-    </div>
+
+        {Array.isArray(section.panels) && section.panels.length > 0 ? (
+          renderPanels(section.panels, 0, null)
+        ) : (
+          <div style={{ fontSize: '12px', color: '#6b7280' }}>No panels yet. Use “+ Add Panel”.</div>
+        )}
+      </div>
+    </DndContext>
   );
 };

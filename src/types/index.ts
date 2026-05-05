@@ -336,6 +336,12 @@ export interface SectionConfig {
   'section-editable'?: boolean;
   /** When true in RegistryView, hides the "Edit Details" link for this section only. */
   'section-hide-edit-button'?: boolean;
+  /**
+   * Optional data root prefix for all widget data paths in this section.
+   * Example: if section-data-root = "<registryId>" and widget-data-path = "fname",
+   * the resolved path becomes "<registryId>.fname".
+   */
+  'section-data-root'?: string;
   'section-column-span'?: number; // Number of columns to span (1, 2, 3, etc.) - for layout control
   'section-supporting-documents'?: SupportingDocumentConfig[];
   panels: PanelConfig[];

@@ -1,61 +1,22 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Provider } from 'react-redux';
-import { JsonEditor } from 'json-edit-react';
 import { SectionConfig } from '../../types';
 import { SectionRenderer } from '../SectionRenderer';
 import { WidgetProvider, useWidgetContext } from '../WidgetProvider';
-import { createWidgetStore, type WidgetStore } from '../../store';
-import { resetIcon, previewIcon } from '../../assets';
-
-// Inject styles to constrain json-edit-react container
-if (typeof document !== 'undefined') {
-  const styleId = 'json-editor-constraints';
-  if (!document.getElementById(styleId)) {
-    const style = document.createElement('style');
-    style.id = styleId;
-    style.textContent = `
-      .json-editor-scroll-container {
-        display: flex !important;
-        flex-direction: column !important;
-        height: 100% !important;
-        max-height: 100% !important;
-        overflow: auto !important;
-      }
-      .json-editor-scroll-container .jer-editor-container {
-        max-width: 100% !important;
-        width: 100% !important;
-        height: auto !important;
-        max-height: none !important;
-        flex-shrink: 0 !important;
-        background-color: white !important;
-      }
-      .json-editor-scroll-container .jer-component {
-        width: 100% !important;
-      }
-    `;
-    document.head.appendChild(style);
-  }
-}
-import {
-  sectionSchema,
-  WIDGET_TYPES,
-  ORIENTATIONS,
-  DATA_SOURCE_TYPES,
-  VALIDATION_TYPES,
-  CHARACTER_TYPES,
-  CASE_CONTROLS,
-  NUMERIC_TYPES,
-  BOOLEAN_REPRESENTATIONS,
-  BOOLEAN_CONTROL_TYPES,
-  CONDITION_OPERATORS,
-} from './schemas';
+import { createWidgetStore } from '../../store';
+import { resetIcon } from '../../assets';
+import { WIDGET_TYPES } from './schemas';
+import { validateSection } from './validate/validateSection';
 
 interface JSONEditorPanelProps {
   section: SectionConfig;
   onChange: (section: SectionConfig) => void;
   onReset?: () => void; // Optional reset handler from parent
-  context?: 'section' | 'panel' | 'widget';
+  mode?: 'raw';
+  rawDraft?: string;
+  onRawDraftChange?: (next: string) => void;
+  onRawValidationChange?: (next: { isValid: boolean; errors: string[] }) => void;
 }
 
 /**
@@ -65,14 +26,16 @@ export const JSONEditorPanel: React.FC<JSONEditorPanelProps> = ({
   section,
   onChange,
   onReset,
-  context = 'section',
+  mode = 'raw',
+  rawDraft,
+  onRawDraftChange,
+  onRawValidationChange,
 }) => {
   const [jsonData, setJsonData] = useState<SectionConfig>(section);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
-  const [rawJsonView, setRawJsonView] = useState<boolean>(false);
   const [rawJsonText, setRawJsonText] = useState<string>('');
   const [showPreview, setShowPreview] = useState<boolean>(false);
-  const [editorKey, setEditorKey] = useState<number>(0); // Key to force JsonEditor re-render on reset
+  const [canApply, setCanApply] = useState<boolean>(true);
 
   // Store the original section when component mounts or section prop changes
   const originalSectionRef = useRef<SectionConfig>(section);
@@ -106,18 +69,19 @@ export const JSONEditorPanel: React.FC<JSONEditorPanelProps> = ({
     }
     // Always sync the display with the section prop (for external updates like reset from parent)
     setJsonData(section);
-    setRawJsonText(JSON.stringify(section, null, 2));
-    // Force JsonEditor to update when section prop changes (e.g., from parent reset)
-    setEditorKey(prev => prev + 1);
-  }, [section]);
+    const nextText = rawDraft ?? JSON.stringify(section, null, 2);
+    setRawJsonText(nextText);
+    onRawDraftChange?.(nextText);
+    setValidationErrors([]);
+    setCanApply(true);
+    onRawValidationChange?.({ isValid: true, errors: [] });
+  }, [section, rawDraft, onRawDraftChange, onRawValidationChange]);
 
   // Reset to original section
   const handleReset = useCallback(() => {
     // If parent provides onReset, use it (this will reset both JSON editor and visual builder)
     if (onReset) {
       onReset();
-      // Also force JsonEditor to remount to ensure it picks up the reset
-      setEditorKey(prev => prev + 1);
       return;
     }
 
@@ -127,10 +91,6 @@ export const JSONEditorPanel: React.FC<JSONEditorPanelProps> = ({
     // Update state immediately
     setJsonData(original);
     setRawJsonText(JSON.stringify(original, null, 2));
-
-    // Force JsonEditor to completely remount by changing key
-    // This is critical because json-edit-react maintains internal state that doesn't sync with props
-    setEditorKey(prev => prev + 1);
 
     // Notify parent
     onChange(original);
@@ -313,119 +273,84 @@ export const JSONEditorPanel: React.FC<JSONEditorPanelProps> = ({
     return data;
   }, []);
 
-  const handleJsonChange = useCallback((data: any) => {
-    // json-edit-react may wrap the data in a "root" key - unwrap it if present
-    let unwrappedData = data?.root ? data.root : data;
+  // Raw-only editor: structured editor removed.
 
-    // Auto-populate widget-type for widgets that don't have it
-    unwrappedData = autoPopulateWidgetType(unwrappedData);
-
-    setJsonData(unwrappedData);
-    setRawJsonText(JSON.stringify(unwrappedData, null, 2));
-
-    // Basic validation
-    const errors: string[] = [];
-    if (!unwrappedData['section-id']) {
-      errors.push('section-id is required');
-    }
-    if (!unwrappedData.panels || !Array.isArray(unwrappedData.panels)) {
-      errors.push('panels must be an array');
-    }
-
-    setValidationErrors(errors);
-
-    // Only update if valid
-    if (errors.length === 0) {
-      onChange(unwrappedData);
-    }
-  }, [onChange, autoPopulateWidgetType]);
-
-  const handleRawJsonChange = useCallback((text: string) => {
-    setRawJsonText(text);
-
-    try {
-      const parsed = JSON.parse(text);
-      const errors: string[] = [];
-
-      if (!parsed['section-id']) {
-        errors.push('section-id is required');
+  const validateText = useCallback(
+    (text: string): { isValid: boolean; errors: string[]; parsed?: SectionConfig } => {
+      try {
+        const parsed = JSON.parse(text);
+        const processed = autoPopulateWidgetType(parsed);
+        const validation = validateSection(processed);
+        return { isValid: validation.isValid, errors: validation.errors, parsed: processed };
+      } catch (error) {
+        return {
+          isValid: false,
+          errors: [`Invalid JSON: ${error instanceof Error ? error.message : 'Parse error'}`],
+        };
       }
-      if (!parsed.panels || !Array.isArray(parsed.panels)) {
-        errors.push('panels must be an array');
+    },
+    [autoPopulateWidgetType]
+  );
+
+  const handleRawJsonChange = useCallback(
+    (text: string) => {
+      setRawJsonText(text);
+      onRawDraftChange?.(text);
+
+      // Validate only (do not apply)
+      const v = validateText(text);
+      setValidationErrors(v.errors);
+      setCanApply(v.isValid);
+      onRawValidationChange?.({ isValid: v.isValid, errors: v.errors });
+
+      // Keep jsonData in sync only when valid, for preview purposes (but do not emit onChange)
+      if (v.isValid && v.parsed) {
+        setJsonData(v.parsed);
       }
+    },
+    [onRawDraftChange, onRawValidationChange, validateText]
+  );
 
-      setValidationErrors(errors);
-
-      // Auto-populate widget-type
-      const processed = autoPopulateWidgetType(parsed);
-
-      if (errors.length === 0) {
-        setJsonData(processed);
-        onChange(processed);
-      }
-    } catch (error) {
-      setValidationErrors([`Invalid JSON: ${error instanceof Error ? error.message : 'Parse error'}`]);
+  const handleValidate = useCallback(() => {
+    const v = validateText(rawJsonText);
+    setValidationErrors(v.errors);
+    setCanApply(v.isValid);
+    onRawValidationChange?.({ isValid: v.isValid, errors: v.errors });
+    if (v.isValid && v.parsed) {
+      setJsonData(v.parsed);
     }
-  }, [onChange, autoPopulateWidgetType]);
+  }, [onRawValidationChange, rawJsonText, validateText]);
 
-  const toggleRawJsonView = useCallback(() => {
-    if (!rawJsonView) {
-      // Switching to raw view - update text from current data
-      setRawJsonText(JSON.stringify(jsonData, null, 2));
+  const handleFormat = useCallback(() => {
+    const v = validateText(rawJsonText);
+    if (!v.isValid || !v.parsed) {
+      setValidationErrors(v.errors);
+      setCanApply(false);
+      onRawValidationChange?.({ isValid: false, errors: v.errors });
+      return;
     }
-    setRawJsonView(!rawJsonView);
-  }, [rawJsonView, jsonData]);
+    const formatted = JSON.stringify(v.parsed, null, 2);
+    setRawJsonText(formatted);
+    onRawDraftChange?.(formatted);
+    setJsonData(v.parsed);
+    setValidationErrors([]);
+    setCanApply(true);
+    onRawValidationChange?.({ isValid: true, errors: [] });
+  }, [onRawDraftChange, onRawValidationChange, rawJsonText, validateText]);
 
-  // Create enum configuration for json-edit-react
-  // This maps field paths to their allowed enum values
-  const enumConfig = useCallback(() => {
-    return {
-      // Section level
-      'section-id': undefined, // string, no enum
-      'section-title': undefined, // string, no enum
-      'section-editable': undefined, // boolean, no enum
-      'section-column-span': undefined, // number, no enum
+  const handleApply = useCallback(() => {
+    const v = validateText(rawJsonText);
+    setValidationErrors(v.errors);
+    setCanApply(v.isValid);
+    onRawValidationChange?.({ isValid: v.isValid, errors: v.errors });
+    if (!v.isValid || !v.parsed) return;
+    setJsonData(v.parsed);
+    onChange(v.parsed);
+  }, [onChange, onRawValidationChange, rawJsonText, validateText]);
 
-      // Panel level - can be nested in panels array
-      'panel-id': undefined, // string, no enum
-      'panel-orientation': ORIENTATIONS, // enum: ['horizontal', 'vertical']
-      'panel-column-span': undefined, // number, no enum
+  // Raw-only editor: no structured editor toggle.
 
-      // Widget level - can be nested in widgets array or widget-item
-      'widget': WIDGET_TYPES, // enum: all widget types
-      'widget-type': ['input', 'layout', 'table', 'group'], // enum
-      'widget-id': undefined, // string, no enum
-      'widget-label': undefined, // string, no enum
-      'widget-orientation': ORIENTATIONS, // enum: ['horizontal', 'vertical']
-      'widget-required': undefined, // boolean, no enum
-      'widget-readonly': undefined, // boolean, no enum
-
-      // Widget data source type
-      'widget-data-source.type': DATA_SOURCE_TYPES, // enum: ['static', 'api', 'schema']
-      'widget-data-source.method': ['GET', 'POST', 'PUT', 'DELETE'], // HTTP methods
-
-      // Widget validation
-      'widget-data-validation.validationType': VALIDATION_TYPES, // enum: ['email', 'phone', 'url']
-
-      // Widget format options
-      'widget-data-format.inputType': ['text', 'email', 'password', 'number', 'tel', 'url', 'search', 'file'],
-      'widget-data-format.characterType': CHARACTER_TYPES,
-      'widget-data-format.caseControl': CASE_CONTROLS,
-      'widget-data-format.numericType': NUMERIC_TYPES,
-      'widget-data-format.roundingMode': ['round', 'truncate'],
-      'widget-data-format.textAlign': ['left', 'right'],
-      'widget-data-format.booleanRepresentation': BOOLEAN_REPRESENTATIONS,
-      'widget-data-format.booleanControlType': BOOLEAN_CONTROL_TYPES,
-      'widget-data-format.layout': ['vertical', 'horizontal', 'grid'],
-      'widget-data-format.inputMethod': ['picker', 'manual', 'hybrid'],
-      'widget-data-format.dateConstraint': ['any', 'past-only', 'future-only'],
-      'widget-data-format.dateTimeConstraint': ['any', 'past-only', 'future-only'],
-
-      // Widget options
-      'widget-data-options.action': ['show', 'hide', 'enable', 'disable'],
-      'widget-data-options.condition.operator': CONDITION_OPERATORS,
-    };
-  }, []);
+  // Raw-only editor: enum config removed.
 
   return (
     <div
@@ -518,63 +443,54 @@ export const JSONEditorPanel: React.FC<JSONEditorPanelProps> = ({
             Reset
           </button>
           <button
-            onClick={() => setShowPreview(true)}
-            className="flex items-center gap-2 px-6 py-1.5 bg-[#4A90E2] hover:bg-[#357ABD] text-[#000000] font-bold rounded-full transition-all shadow-sm"
-            title="Preview Section"
-          >
-            <span className="text-[14px]">Preview</span>
-            <img
-              src={previewIcon}
-              alt="Preview"
-              className="w-3 h-3.5"
-            />
-          </button>
-          <span
+            type="button"
+            onClick={handleValidate}
             style={{
-              fontSize: '12px',
-              color: !rawJsonView ? '#007bff' : '#6c757d',
-              fontWeight: !rawJsonView ? 600 : 400,
-              transition: 'color 0.2s',
-            }}
-          >
-            Tree
-          </span>
-          <div
-            onClick={toggleRawJsonView}
-            style={{
-              position: 'relative',
-              width: '44px',
-              height: '24px',
-              background: rawJsonView ? '#007bff' : '#ccc',
-              borderRadius: '12px',
+              padding: '6px 12px',
+              border: '1px solid #ddd',
+              borderRadius: '10px',
+              background: 'white',
+              color: '#111827',
               cursor: 'pointer',
-              transition: 'background 0.2s',
-            }}
-          >
-            <div
-              style={{
-                position: 'absolute',
-                top: '2px',
-                left: rawJsonView ? '22px' : '2px',
-                width: '20px',
-                height: '20px',
-                background: 'white',
-                borderRadius: '50%',
-                transition: 'left 0.2s',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-              }}
-            />
-          </div>
-          <span
-            style={{
               fontSize: '12px',
-              color: rawJsonView ? '#007bff' : '#6c757d',
-              fontWeight: rawJsonView ? 600 : 400,
-              transition: 'color 0.2s',
+              fontWeight: 700,
             }}
           >
-            Raw
-          </span>
+            Validate
+          </button>
+          <button
+            type="button"
+            onClick={handleFormat}
+            style={{
+              padding: '6px 12px',
+              border: '1px solid #ddd',
+              borderRadius: '10px',
+              background: 'white',
+              color: '#111827',
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: 700,
+            }}
+          >
+            Format
+          </button>
+          <button
+            type="button"
+            onClick={handleApply}
+            disabled={!canApply}
+            style={{
+              padding: '6px 12px',
+              border: 'none',
+              borderRadius: '10px',
+              background: canApply ? '#111827' : '#9ca3af',
+              color: 'white',
+              cursor: canApply ? 'pointer' : 'not-allowed',
+              fontSize: '12px',
+              fontWeight: 700,
+            }}
+          >
+            Apply
+          </button>
         </div>
       </div>
       <div
@@ -586,56 +502,32 @@ export const JSONEditorPanel: React.FC<JSONEditorPanelProps> = ({
           background: 'white',
           border: '1px solid #E1E1E1',
           borderRadius: '10px',
-          padding: rawJsonView ? '0' : '20px',
+          padding: '0',
           position: 'relative',
           display: 'flex',
           flexDirection: 'column',
         }}
       >
-        {rawJsonView ? (
-          <textarea
-            value={rawJsonText}
-            onChange={(e) => handleRawJsonChange(e.target.value)}
-            style={{
-              width: '100%',
-              height: '100%',
-              background: 'white',
-              color: '#333',
-              border: 'none',
-              padding: '20px',
-              fontFamily: 'Monaco, Menlo, "Ubuntu Mono", Consolas, "source-code-pro", monospace',
-              fontSize: '13px',
-              lineHeight: '1.5',
-              resize: 'none',
-              outline: 'none',
-              boxSizing: 'border-box',
-              borderRadius: '10px',
-            }}
-            spellCheck={false}
-          />
-        ) : (
-          <div
-            className="json-editor-scroll-container"
-            style={{
-              width: '100%',
-              height: '100%',
-              minHeight: 0,
-              maxHeight: '100%',
-              overflow: 'auto',
-              position: 'relative',
-              display: 'flex',
-              flexDirection: 'column',
-              flex: '1 1 0',
-            }}
-          >
-            <JsonEditor
-              key={`editor-${editorKey}`} // Force re-render on reset - use string key for better remounting
-              data={jsonData}
-              setData={handleJsonChange}
-              {...({ enumOptions: enumConfig() } as any)}
-            />
-          </div>
-        )}
+        <textarea
+          value={rawJsonText}
+          onChange={(e) => handleRawJsonChange(e.target.value)}
+          style={{
+            width: '100%',
+            height: '100%',
+            background: 'white',
+            color: '#333',
+            border: 'none',
+            padding: '20px',
+            fontFamily: 'Monaco, Menlo, "Ubuntu Mono", Consolas, "source-code-pro", monospace',
+            fontSize: '13px',
+            lineHeight: '1.5',
+            resize: 'none',
+            outline: 'none',
+            boxSizing: 'border-box',
+            borderRadius: '10px',
+          }}
+          spellCheck={false}
+        />
       </div>
       {showPreview && createPortal(
         <div

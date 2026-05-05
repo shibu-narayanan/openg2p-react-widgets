@@ -1,6 +1,40 @@
 import { SectionConfig, PanelConfig, BaseWidgetConfig } from '../types';
 
 /**
+ * Prefix a data path with the section data root (if provided).
+ * Leaves already-prefixed paths untouched.
+ */
+const applyDataRootToDataPath = (
+  dataPath: string | Record<string, string> | undefined,
+  dataRoot: string,
+): string | Record<string, string> | undefined => {
+  if (!dataPath) return dataPath;
+
+  const prefix = `${dataRoot}.`;
+
+  if (typeof dataPath === 'string') {
+    if (!dataPath) return dataPath;
+    if (dataPath === dataRoot) return dataPath;
+    if (dataPath.startsWith(prefix)) return dataPath;
+    return `${dataRoot}.${dataPath}`;
+  }
+
+  const rooted: Record<string, string> = {};
+  for (const [key, path] of Object.entries(dataPath)) {
+    if (!path) {
+      rooted[key] = path;
+      continue;
+    }
+    if (path === dataRoot || path.startsWith(prefix)) {
+      rooted[key] = path;
+      continue;
+    }
+    rooted[key] = `${dataRoot}.${path}`;
+  }
+  return rooted;
+};
+
+/**
  * Namespace a data path by adding a namespace prefix
  */
 const namespaceDataPath = (
@@ -79,6 +113,62 @@ const namespaceWidgetConfig = (
 };
 
 /**
+ * Apply section-data-root to all widget data paths in a section (recursive).
+ * This enables using relative widget-data-path values like "fname" instead of "<id>.fname".
+ */
+export const applySectionDataRoot = (section: SectionConfig): SectionConfig => {
+  const dataRoot = section['section-data-root'];
+  if (!dataRoot) return section;
+
+  const applyToWidget = (w: BaseWidgetConfig): BaseWidgetConfig => {
+    const next: BaseWidgetConfig = { ...w };
+
+    if (next['widget-data-path']) {
+      next['widget-data-path'] = applyDataRootToDataPath(next['widget-data-path'], dataRoot) as any;
+    }
+
+    if (next.widgets && Array.isArray(next.widgets)) {
+      next.widgets = next.widgets.map(applyToWidget);
+    }
+
+    if (next['widget-item']) {
+      next['widget-item'] = applyToWidget(next['widget-item']);
+    }
+
+    if (next['widget-data-columns'] && Array.isArray(next['widget-data-columns'])) {
+      next['widget-data-columns'] = next['widget-data-columns'].map((col) => {
+        const c = { ...col };
+        if (c['widget-data-path'] && typeof c['widget-data-path'] === 'string') {
+          c['widget-data-path'] = applyDataRootToDataPath(c['widget-data-path'], dataRoot) as string;
+        }
+        return c;
+      });
+    }
+
+    return next;
+  };
+
+  const applyToPanel = (p: PanelConfig): PanelConfig => {
+    const next: PanelConfig = { ...p };
+    if (next.panels && Array.isArray(next.panels)) next.panels = next.panels.map(applyToPanel);
+    if (next.widgets && Array.isArray(next.widgets)) next.widgets = next.widgets.map(applyToWidget);
+    return next;
+  };
+
+  const nextSection: SectionConfig = { ...section };
+  if (nextSection.panels && Array.isArray(nextSection.panels)) {
+    nextSection.panels = nextSection.panels.map(applyToPanel);
+  }
+  if (nextSection['section-supporting-documents'] && Array.isArray(nextSection['section-supporting-documents'])) {
+    nextSection['section-supporting-documents'] = nextSection['section-supporting-documents'].map((doc) => ({
+      ...doc,
+      'document-data-path': applyDataRootToDataPath(doc['document-data-path'], dataRoot) as string,
+    }));
+  }
+  return nextSection;
+};
+
+/**
  * Recursively namespace widget IDs in a panel configuration
  */
 const namespacePanelConfig = (
@@ -117,7 +207,8 @@ export const namespaceSectionConfig = (
   section: SectionConfig,
   namespace: string
 ): SectionConfig => {
-  const namespaced: SectionConfig = { ...section };
+  const rooted = applySectionDataRoot(section);
+  const namespaced: SectionConfig = { ...rooted };
 
   // Namespace the section-id as well to ensure uniqueness
   if (namespaced['section-id']) {

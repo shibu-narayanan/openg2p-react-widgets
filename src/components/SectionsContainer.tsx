@@ -6,7 +6,7 @@ import { SectionRenderer, SectionChanges } from './SectionRenderer';
 import { useWidgetContext } from './WidgetProvider';
 import { WidgetRootState } from '../store';
 import { sectionValidate } from '../utils/sectionValidate';
-import { namespaceSectionConfig } from '../utils/schemaNamespace';
+import { applySectionDataRoot, namespaceSectionConfig } from '../utils/schemaNamespace';
 import { buildSectionChanges } from '../utils/buildSectionChanges';
 
 export type SectionMode = 'RegistryView' | 'CRView' | 'IntakeForm';
@@ -251,7 +251,8 @@ export const SectionsContainer = ({
         for (let i = 0; i < safeSections.length; i++) {
           const section = safeSections[i];
           const ns = getNamespace(section, i);
-          const sectionToValidate = ns ? namespaceSectionConfig(section, ns) : section;
+          const rooted = applySectionDataRoot(section);
+          const sectionToValidate = ns ? namespaceSectionConfig(rooted, ns) : rooted;
           const valid = sectionValidate(sectionToValidate, values, dispatch);
           if (!valid) allValid = false;
         }
@@ -265,12 +266,13 @@ export const SectionsContainer = ({
         for (let i = 0; i < safeSections.length; i++) {
           const section = safeSections[i];
           const ns = getNamespace(section, i);
-          const sectionToValidate = ns ? namespaceSectionConfig(section, ns) : section;
+          const rooted = applySectionDataRoot(section);
+          const sectionToValidate = ns ? namespaceSectionConfig(rooted, ns) : rooted;
           const valid = sectionValidate(sectionToValidate, values, dispatch);
           if (!valid) {
             throw new Error('Validation failed');
           }
-          results.push(buildSectionChanges(section, values, ns));
+          results.push(buildSectionChanges(rooted, values, ns));
         }
         return results;
       },
@@ -280,7 +282,8 @@ export const SectionsContainer = ({
         for (let i = 0; i < safeSections.length; i++) {
           const section = safeSections[i];
           const ns = getNamespace(section, i);
-          results.push(buildSectionChanges(section, values, ns));
+          const rooted = applySectionDataRoot(section);
+          results.push(buildSectionChanges(rooted, values, ns));
         }
         return results;
       },

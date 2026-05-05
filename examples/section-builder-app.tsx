@@ -108,6 +108,19 @@ type TabId =
 function App() {
   const [section, setSection] = useState<SectionConfig>(initialSection);
   const [activeTab, setActiveTab] = useState<TabId>('section-builder');
+  const tabStyle = (id: TabId): React.CSSProperties => {
+    const isActive = activeTab === id;
+    return {
+      padding: '8px 16px',
+      fontWeight: isActive ? 600 : 400,
+      background: isActive ? 'var(--owt-color-bg-alt, #F6F6F6)' : 'transparent',
+      border: `1px solid ${isActive ? 'var(--owt-color-border, #C4C4C4)' : 'transparent'}`,
+      borderRadius: 'var(--owt-btn-border-radius, 6px)',
+      cursor: 'pointer',
+      color: 'var(--owt-color-text, #011627)',
+      fontFamily: 'Roboto, sans-serif',
+    };
+  };
 
   const handleSectionChange = (updatedSection: SectionConfig) => {
     setSection(updatedSection);
@@ -127,7 +140,7 @@ function App() {
           height: '100vh',
           display: 'flex',
           flexDirection: 'column',
-          background: '#f5f5f5',
+          background: 'var(--owt-color-bg-alt, #F6F6F6)',
           boxSizing: 'border-box',
           overflow: 'hidden',
         }}>
@@ -135,90 +148,48 @@ function App() {
             display: 'flex',
             gap: '8px',
             padding: '12px 20px',
-            background: '#fff',
-            borderBottom: '1px solid #e5e5e5',
+            background: 'var(--owt-color-bg, #FFFFFF)',
+            borderBottom: '1px solid var(--owt-color-border-light, #E4E4E4)',
           }}>
             <button
               type="button"
               onClick={() => setActiveTab('section-builder')}
-              style={{
-                padding: '8px 16px',
-                fontWeight: activeTab === 'section-builder' ? 600 : 400,
-                background: activeTab === 'section-builder' ? '#e5e7eb' : 'transparent',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
+              style={tabStyle('section-builder')}
             >
               Section Builder
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('intake-form')}
-              style={{
-                padding: '8px 16px',
-                fontWeight: activeTab === 'intake-form' ? 600 : 400,
-                background: activeTab === 'intake-form' ? '#e5e7eb' : 'transparent',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
+              style={tabStyle('intake-form')}
             >
               Intake Form
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('header-section')}
-              style={{
-                padding: '8px 16px',
-                fontWeight: activeTab === 'header-section' ? 600 : 400,
-                background: activeTab === 'header-section' ? '#e5e7eb' : 'transparent',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
+              style={tabStyle('header-section')}
             >
               Header Section
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('section-renderer')}
-              style={{
-                padding: '8px 16px',
-                fontWeight: activeTab === 'section-renderer' ? 600 : 400,
-                background: activeTab === 'section-renderer' ? '#e5e7eb' : 'transparent',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
+              style={tabStyle('section-renderer')}
             >
               Section Renderer
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('dialog-table')}
-              style={{
-                padding: '8px 16px',
-                fontWeight: activeTab === 'dialog-table' ? 600 : 400,
-                background: activeTab === 'dialog-table' ? '#e5e7eb' : 'transparent',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
+              style={tabStyle('dialog-table')}
             >
               Dialog Table
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('theme')}
-              style={{
-                padding: '8px 16px',
-                fontWeight: activeTab === 'theme' ? 600 : 400,
-                background: activeTab === 'theme' ? '#e5e7eb' : 'transparent',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
+              style={tabStyle('theme')}
             >
               Theme
             </button>

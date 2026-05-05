@@ -13,7 +13,7 @@ import { getValueByPath, setValueByPath, setWidgetValue } from '../utils/pathUti
 import { useWidgetContext } from './WidgetProvider';
 import { FileInputWidget } from '../widgets/FileInputWidget';
 import { SectionMode } from './SectionsContainer';
-import { namespaceSectionConfig } from '../utils/schemaNamespace';
+import { applySectionDataRoot, namespaceSectionConfig } from '../utils/schemaNamespace';
 import { sectionValidate, collectWidgets } from '../utils/sectionValidate';
 import { extractTableRecordsFromSnapshot, isTableLikeWidget } from '../utils/extractTableRecordsFromSnapshot';
 import { downArrowIcon, personIcon, calendarIcon, rightArrowIcon, arrowUpIcon, arrowDownIcon, arrowLeftIcon, arrowRightIcon } from '../assets';
@@ -155,10 +155,9 @@ export const SectionRenderer = ({
   // Namespace the section if namespace is provided
   // This ensures unique widget IDs when the same section is rendered multiple times
   const namespacedSection = useMemo(() => {
-    if (namespace) {
-      return namespaceSectionConfig(section, namespace);
-    }
-    return section;
+    const rooted = applySectionDataRoot(section);
+    if (namespace) return namespaceSectionConfig(rooted, namespace);
+    return rooted;
   }, [section, namespace]);
 
   // Create namespaced schemaData if namespace is provided.
